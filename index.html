@@ -1,0 +1,445 @@
+
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8"/>
+<title>Hra V1 - multitouch fixed</title>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<style>
+  body { margin: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+  canvas { border: 1px solid black; touch-action: none; display: block; }
+  #message {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 48px;
+    font-weight: bold;
+    color: white;
+    background-color: rgba(0,0,0,0.7);
+    padding: 20px 40px;
+    border-radius: 12px;
+    z-index: 100;
+    text-align: center;
+  }
+  #restartBtn {
+    font-size: 24px;
+    padding: 10px 20px;
+    background-color: darkgreen;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    margin: 20px;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="message">Victory, Katarina!<br>
+  <br>
+  Because of you,<br>
+  even this game is<br>
+  something special,<br>and even the smallest<br>
+  victories make<br>so much more sense.<br>
+</div>
+<button id="restartBtn">AGAIN</button>
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const messageDiv = document.getElementById("message");
+const restartBtn = document.getElementById("restartBtn");
+
+const rows = 5;
+const cols = 5;
+let tileSize;
+let tiles = [];
+let animations = [];
+let isMouseDown = false;
+let selected = null;
+let draggingTile = null;
+let activeTouchId = null;
+const colors = ["green", "blue", "red", "gray"];
+
+function resizeCanvas() {
+  const shorterSide = Math.min(window.innerWidth, window.innerHeight * 0.9);
+  canvas.width = shorterSide;
+  canvas.height = shorterSide;
+  tileSize = canvas.width / cols;
+  draw();
+}
+
+function createTiles() {
+  const totalTiles = rows * cols;
+  const minPerColor = 3;
+  const baseColors = ["green", "blue", "red"];
+  let positions = [];
+  for (let y = 0; y < rows; y++)
+    for (let x = 0; x < cols; x++)
+      positions.push([y, x]);
+
+  // Rohové "ramená" - zakázané dvojice
+  const forbiddenPairs = [
+    // ľavý horný roh
+    [[1,0], [0,1]],
+    // pravý horný roh
+    [[1,cols-1], [0,cols-2]],
+    // ľavý dolný roh
+    [[rows-2,0], [rows-1,1]],
+    // pravý dolný roh
+    [[rows-2,cols-1], [rows-1,cols-2]],
+  ];
+
+  function isForbiddenPair(a, b) {
+    return forbiddenPairs.some(
+      ([p1, p2]) =>
+        ((a[0] === p1[0] && a[1] === p1[1] && b[0] === p2[0] && b[1] === p2[1]) ||
+         (b[0] === p1[0] && b[1] === p1[1] && a[0] === p2[0] && a[1] === p2[1]))
+    );
+  }
+
+  let grayA, grayB;
+  while (true) {
+    // Zamiešame všetky možné pozície
+    const shuffled = positions.slice().sort(() => Math.random() - 0.5);
+    grayA = shuffled[0];
+    grayB = shuffled.find(p => p[0] !== grayA[0] || p[1] !== grayA[1]);
+    if (!isForbiddenPair(grayA, grayB)) break;
+    // ak je zakázaná dvojica, skúšame znova
+  }
+
+  // Naplníme pole najprv sivými, potom ostatnými farbami
+  let tileList = [];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if ((y === grayA[0] && x === grayA[1]) || (y === grayB[0] && x === grayB[1])) {
+        tileList.push({ color: "gray" });
+      } else {
+        tileList.push(null);
+      }
+    }
+  }
+
+  // Každá z ostatných farieb aspoň 3x
+  let leftTiles = [];
+  for (const color of baseColors) {
+    for (let i = 0; i < minPerColor; i++) {
+      leftTiles.push({ color });
+    }
+  }
+  while (leftTiles.length < totalTiles - 2) {
+    const color = baseColors[Math.floor(Math.random() * baseColors.length)];
+    leftTiles.push({ color });
+  }
+
+  // Zamiešame farby
+  for (let i = leftTiles.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [leftTiles[i], leftTiles[j]] = [leftTiles[j], leftTiles[i]];
+  }
+
+  // Doplň zvyšné políčka
+  let idx = 0;
+  for (let i = 0; i < tileList.length; i++) {
+    if (tileList[i] === null) {
+      tileList[i] = leftTiles[idx++];
+    }
+  }
+
+  // Rozdelenie na 2D pole
+  tiles = [];
+  for (let y = 0; y < rows; y++) {
+    const row = [];
+    for (let x = 0; x < cols; x++) {
+      row.push(tileList[y * cols + x]);
+    }
+    tiles.push(row);
+  }
+}
+
+
+function drawTiles() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (!tiles[y][x]) continue;
+      ctx.fillStyle = tiles[y][x].color;
+      ctx.fillRect(x * tileSize - 0.5, y * tileSize - 0.5, tileSize + 1, tileSize + 1);
+    }
+  }
+}
+
+
+
+function drawDraggedTile(mx, my) {
+  if (!draggingTile || !isMouseDown) return;
+  const half = tileSize / 2;
+  const x = Math.max(half, Math.min(mx, canvas.width - half)) - half;
+  const y = Math.max(half, Math.min(my, canvas.height - half)) - half;
+  ctx.save();
+  ctx.globalAlpha = 0.92;
+  ctx.translate(x, y);
+  ctx.shadowColor = "rgba(0,0,0,0.5)";
+  ctx.shadowBlur = 12;
+  
+if (images[draggingTile.color] && images[draggingTile.color].complete) {
+  ctx.drawImage(images[draggingTile.color], 0, 0, tileSize, tileSize);
+} else {
+  ctx.fillStyle = draggingTile.color;
+  ctx.fillRect(0, 0, tileSize, tileSize);
+}
+
+  ctx.restore();
+}
+
+
+function drawAnimatedTiles() {
+  const now = performance.now();
+  animations = animations.filter(anim => {
+    const t = Math.min(1, (now - anim.start) / anim.duration);
+    const x = anim.from.col * (1 - t) + anim.to.col * t;
+    const y = anim.from.row * (1 - t) + anim.to.row * t;
+    ctx.fillStyle = anim.color;
+    ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+    
+    return t < 1;
+  });
+  if (animations.length) requestAnimationFrame(draw);
+}
+
+function draw(mx = null, my = null) {
+  drawTiles();
+  if (mx !== null && my !== null) drawDraggedTile(mx, my);
+  drawAnimatedTiles();
+}
+
+function getCoords(px, py) {
+  const col = Math.floor(px / tileSize);
+  const row = Math.floor(py / tileSize);
+  return col >= 0 && col < cols && row >= 0 && row < rows ? { col, row } : null;
+}
+
+function getPath(from, to) {
+  const path = [];
+  let cx = from.col, cy = from.row;
+  while (cx !== to.col) {
+    cx += Math.sign(to.col - cx);
+    path.push({ col: cx, row: cy });
+  }
+  while (cy !== to.row) {
+    cy += Math.sign(to.row - cy);
+    path.push({ col: cx, row: cy });
+  }
+  return path;
+}
+
+function startInteraction(mx, my) {
+  const coord = getCoords(mx, my);
+  if (!coord) return;
+  const hoveredTile = tiles[coord.row][coord.col];const tile = tiles[coord.row][coord.col];
+  if (tile.color === "gray") return;
+  isMouseDown = true;
+  selected = coord;
+  draggingTile = tiles[selected.row][selected.col];
+  tiles[selected.row][selected.col] = null;
+  draw(mx, my);
+}
+
+function moveInteraction(mx, my) {
+  if (!isMouseDown || !draggingTile) return;
+  const current = getCoords(mx, my);
+  if (!current) {
+    endInteraction();
+    return;
+  }
+  const path = getPath(selected, current);
+  for (const step of path) {
+  if (!tiles[step.row][step.col]) continue;
+  const currentTile = tiles[step.row][step.col];
+  if (currentTile.color === "gray") continue;
+
+  animations.push({
+    from: { ...step },
+    to: { ...selected },
+    color: currentTile.color,
+    start: performance.now(),
+    duration: 75
+  });
+
+  tiles[selected.row][selected.col] = currentTile;
+  selected = { ...step };
+}
+  if (selected) {
+    tiles[selected.row][selected.col] = null;
+  }
+  draw(mx, my);
+}
+
+function endInteraction() {
+  if (draggingTile && selected) tiles[selected.row][selected.col] = draggingTile;
+  isMouseDown = false;
+  draggingTile = null;
+  selected = null;
+  draw();
+  checkRegions();
+}
+
+function checkRegions() {
+  const visited = Array.from({ length: rows }, () => Array(cols).fill(false));
+  const colorRegions = Object.fromEntries(colors.map(c => [c, 0]));
+
+  function flood(x, y, col) {
+    const q = [[x, y]];
+    visited[y][x] = true;
+    while (q.length) {
+      const [cx, cy] = q.pop();
+      [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy]) => {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx>=0&&nx<cols&&ny>=0&&ny<rows&&!visited[ny][nx]&&tiles[ny][nx]&&tiles[ny][nx].color===col) {
+          visited[ny][nx]=true; q.push([nx,ny]);
+        }
+      });
+    }
+  }
+
+  for (let y=0; y<rows; y++) {
+    for (let x=0; x<cols; x++) {
+      if (!visited[y][x] && tiles[y][x]) {
+        const col = tiles[y][x].color;
+        if (colors.includes(col)) {
+          colorRegions[col] += 1;
+          flood(x, y, col);
+        }
+      }
+    }
+  }
+
+  const baseColors = ["green", "blue", "red"];
+  const win = baseColors.every(color => colorRegions[color] === 1) &&
+              Object.entries(colorRegions).every(([color, count]) =>
+                baseColors.includes(color) ? count === 1 : true);
+  if (win) {
+    messageDiv.style.display = "block";
+  }
+}
+
+canvas.addEventListener('mousedown', e => {
+  const rect = canvas.getBoundingClientRect();
+  startInteraction(e.clientX - rect.left, e.clientY - rect.top);
+});
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  moveInteraction(e.clientX - rect.left, e.clientY - rect.top);
+});
+canvas.addEventListener('mouseup', endInteraction);
+canvas.addEventListener('mouseleave', endInteraction);
+
+canvas.addEventListener('touchstart', e => {
+  if (activeTouchId !== null) {
+    endInteraction();
+    activeTouchId = null;
+  }
+  const touch = e.changedTouches[0];
+  activeTouchId = touch.identifier;
+  const rect = canvas.getBoundingClientRect();
+  startInteraction(touch.clientX - rect.left, touch.clientY - rect.top);
+});
+
+canvas.addEventListener('touchmove', e => {
+  const touch = Array.from(e.touches).find(t => t.identifier === activeTouchId);
+  if (!touch) return;
+  const rect = canvas.getBoundingClientRect();
+  moveInteraction(touch.clientX - rect.left, touch.clientY - rect.top);
+});
+
+canvas.addEventListener('touchend', e => {
+  if (Array.from(e.changedTouches).some(t => t.identifier === activeTouchId)) {
+    endInteraction();
+    activeTouchId = null;
+  }
+});
+
+restartBtn.addEventListener("click", () => {
+  messageDiv.style.display = "none";
+  createTiles();
+  draw();
+});
+
+window.addEventListener("load", () => {
+  createTiles();
+  resizeCanvas();
+});
+
+function fixBlockedTiles() {
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const tile = tiles[row][col];
+
+      const up = row > 0 ? tiles[row - 1][col] : null;
+      const down = row < rows - 1 ? tiles[row + 1][col] : null;
+      const left = col > 0 ? tiles[row][col - 1] : null;
+      const right = col < cols - 1 ? tiles[row][col + 1] : null;
+
+      const neighbors = [up, down, left, right].filter(n => n);
+
+      if (grays.length === neighbors.length) {
+        // Náhodne jednu sivú nahradíme farbou aktuálnej dlaždice
+        const candidates = [];
+
+        if (candidates.length > 0) {
+          const [r, c] = candidates[Math.floor(Math.random() * candidates.length)];
+          tiles[r][c].color = tile.color;
+        }
+      }
+    }
+  }
+}
+
+
+
+// Načítanie obrázka pre modrú dlaždicu
+
+const blueImage = new Image();
+blueImage.src = "Color02.jpg";
+const redImage = new Image();
+redImage.src = "Color03.jpg";
+const greenImage = new Image();
+greenImage.src = "Color01.jpg";
+const grayImage = new Image();
+grayImage.src = "Color00.jpg";
+
+const images = {
+  blue: blueImage,
+  red: redImage,
+  green: greenImage,
+  gray: grayImage
+};
+
+
+// Funkcia na vykreslenie dlaždíc (s kontrolou načítania obrázka)
+function drawTiles() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const tile = tiles[row][col];
+      const x = col * tileSize;
+      const y = row * tileSize;
+
+      if (tile === null) continue;
+
+      
+if (images[tile.color] && images[tile.color].complete) {
+  ctx.drawImage(images[tile.color], x, y, tileSize, tileSize);
+} else {
+  ctx.fillStyle = tile.color;
+  ctx.fillRect(x, y, tileSize, tileSize);
+}
+
+    }
+  }
+}
+</script>
+
+</body>
+</html>
