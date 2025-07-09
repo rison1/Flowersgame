@@ -14,7 +14,7 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    font-size: 48px;
+    /* font-size: 48px;  <-- vymaž alebo zakomentuj tento riadok */
     font-weight: bold;
     color: white;
     background-color: rgba(0,0,0,0.7);
@@ -22,7 +22,7 @@
     border-radius: 12px;
     z-index: 100;
     text-align: center;
-  }
+}
   #restartBtn {
     font-size: 24px;
     padding: 10px 20px;
@@ -67,6 +67,9 @@ function resizeCanvas() {
   canvas.width = shorterSide;
   canvas.height = shorterSide;
   tileSize = canvas.width / cols;
+    // Dynamické prispôsobenie fontu správy veľkosti canvasu
+  const messageFontSize = Math.round(canvas.width * 0.07); // cca 7% šírky
+  messageDiv.style.fontSize = messageFontSize + "px";
   draw();
 }
 
