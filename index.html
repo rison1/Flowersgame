@@ -207,9 +207,10 @@ function drawAnimatedTiles() {
     const t = Math.min(1, (now - anim.start) / anim.duration);
     const x = anim.from.col * (1 - t) + anim.to.col * t;
     const y = anim.from.row * (1 - t) + anim.to.row * t;
-    ctx.fillStyle = anim.color;
-    ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
-    
+
+    // Vždy vykresľuj JPG dlaždicu
+    ctx.drawImage(images[anim.color], x * tileSize, y * tileSize, tileSize, tileSize);
+
     return t < 1;
   });
   if (animations.length) requestAnimationFrame(draw);
