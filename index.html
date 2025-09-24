@@ -64,6 +64,7 @@ let isMouseDown = false;
 let selected = null;
 let draggingTile = null;
 let activeTouchId = null;
+let lastMX = null, lastMY = null;
 const colors = ["green", "blue", "red", "gray"];
 
 function resizeCanvas() {
@@ -165,20 +166,6 @@ function createTiles() {
   }
 }
 
-
-function drawTiles() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      if (!tiles[y][x]) continue;
-      ctx.fillStyle = tiles[y][x].color;
-      ctx.fillRect(x * tileSize - 0.5, y * tileSize - 0.5, tileSize + 1, tileSize + 1);
-    }
-  }
-}
-
-
-
 function drawDraggedTile(mx, my) {
   if (!draggingTile || !isMouseDown) return;
   const half = tileSize / 2;
@@ -228,19 +215,211 @@ function getCoords(px, py) {
   return col >= 0 && col < cols && row >= 0 && row < rows ? { col, row } : null;
 }
 
-function getPath(from, to) {
-  const path = [];
-  let cx = from.col, cy = from.row;
-  while (cx !== to.col) {
-    cx += Math.sign(to.col - cx);
-    path.push({ col: cx, row: cy });
-  }
-  while (cy !== to.row) {
-    cy += Math.sign(to.row - cy);
-    path.push({ col: cx, row: cy });
-  }
-  return path;
+
+function isGrayAt(r, c) {
+  const t = tiles[r][c];
+  return t && t.color === "gray";
 }
+
+// neighbors (4-dir), allow moving through non-gray tiles (occupied allowed)
+function _nb(pos) {
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+  const out = [];
+  for (const [dx,dy] of dirs) {
+    const nc = pos.col + dx, nr = pos.row + dy;
+    if (nc>=0 && nc<cols && nr>=0 && nr<rows) {
+      if (!isGrayAt(nr, nc)) out.push({col:nc, row:nr});
+    }
+  }
+  return out;
+}
+
+function _reconstruct(came, key) {
+  const path = [];
+  while (key) {
+    const [r,c] = key.split(',').map(Number);
+    path.push({row:r, col:c});
+    key = came.get(key);
+  }
+  return path.reverse();
+}
+
+// BFS shortest path avoiding gray
+
+function isGrayAt(r, c) {
+  const t = tiles[r][c];
+  return t && t.color === "gray";
+}
+
+
+function isGrayAt(r, c) {
+  const t = tiles[r][c];
+  return t && t.color === "gray";
+}
+
+// A* with: 
+// - Manhattan heuristic
+// - axis preference toward drag direction
+// - when dragging horizontally and detouring vertically, prefer going UP first (row-1) -> "gravity from above"
+
+function isGrayAt(r, c) {
+  const t = tiles[r][c];
+  return t && t.color === "gray";
+}
+
+// Find first gray tile encountered horizontally along given row between c0->c1 (inclusive)
+function findBlockingGrayHorizontal(row, c0, c1) {
+  const step = c1 >= c0 ? 1 : -1;
+  for (let c = c0; c !== c1 + step; c += step) {
+    if (c >= 0 && c < cols && row >= 0 && row < rows) {
+      if (isGrayAt(row, c)) return { row, col: c };
+    }
+  }
+  return null;
+}
+
+// Find first gray tile encountered vertically along given col between r0->r1 (inclusive)
+function findBlockingGrayVertical(col, r0, r1) {
+  const step = r1 >= r0 ? 1 : -1;
+  for (let r = r0; r !== r1 + step; r += step) {
+    if (r >= 0 && r < rows && col >= 0 && col < cols) {
+      if (isGrayAt(r, col)) return { row: r, col: col };
+    }
+  }
+  return null;
+}
+
+function getPath(from, to) {
+  const start = {row: from.row, col: from.col};
+  const goal  = {row: to.row,   col: to.col};
+  if (start.row === goal.row && start.col === goal.col) return [start];
+
+  // Drag analysis
+  const dx = Math.abs(goal.col - start.col);
+  const dy = Math.abs(goal.row - start.row);
+  const horizontalDrag = dx > dy;
+  const preferVertical = !horizontalDrag;
+
+  // Determine side preference near the FIRST blocking gray between start and goal
+  let vertPref = 0;   // -1 = up, +1 = down
+  let horizPref = 0;  // -1 = left, +1 = right
+
+  if (horizontalDrag) {
+    const blk = findBlockingGrayHorizontal(start.row, start.col, goal.col);
+    if (blk && typeof lastMY === 'number') {
+      const centerY = (blk.row + 0.5) * tileSize;
+      vertPref = (lastMY < centerY) ? -1 : 1; // if pointer is in upper half -> go UP, else DOWN
+    }
+  } else {
+    const blk = findBlockingGrayVertical(start.col, start.row, goal.row);
+    if (blk && typeof lastMX === 'number') {
+      const centerX = (blk.col + 0.5) * tileSize;
+      horizPref = (lastMX < centerX) ? -1 : 1; // if pointer is in left half -> go LEFT, else RIGHT
+    }
+  }
+
+  function key(p){ return p.row + "," + p.col; }
+  function h(p){
+    const ddx = Math.abs(p.col - goal.col);
+    const ddy = Math.abs(p.row - goal.row);
+    const bias = preferVertical ? (p.col !== goal.col ? 0.001 : 0) : (p.row !== goal.row ? 0.001 : 0);
+    return ddx + ddy + bias;
+  }
+  function neighbors(p){
+    const out = [];
+    const dirs = [
+      {dx:  1, dy:  0}, // right
+      {dx: -1, dy:  0}, // left
+      {dx:  0, dy: -1}, // up
+      {dx:  0, dy:  1}  // down
+    ];
+    for (const d of dirs){
+      const nc = p.col + d.dx, nr = p.row + d.dy;
+      if (nc>=0 && nc<cols && nr>=0 && nr<rows && !isGrayAt(nr,nc)){
+        out.push({row: nr, col: nc, dx: d.dx, dy: d.dy});
+      }
+    }
+    // Sort neighbors for "natural" preference:
+    out.sort((a,b)=>{
+      // 0) Prefer main-axis steps first
+      const aMain = preferVertical ? Math.abs(a.dy) : Math.abs(a.dx);
+      const bMain = preferVertical ? Math.abs(b.dy) : Math.abs(b.dx);
+      if (aMain !== bMain) return bMain - aMain;
+
+      // 1) If horizontal drag and both moves are vertical (detours), honor vertPref
+      if (horizontalDrag && vertPref !== 0) {
+        const aFav = (a.dy === vertPref) ? 1 : 0;
+        const bFav = (b.dy === vertPref) ? 1 : 0;
+        if (aFav !== bFav) return bFav - aFav;
+      }
+      // 2) If vertical drag and both moves are horizontal (detours), honor horizPref
+      if (!horizontalDrag && horizPref !== 0) {
+        const aFav = (a.dx === horizPref) ? 1 : 0;
+        const bFav = (b.dx === horizPref) ? 1 : 0;
+        if (aFav !== bFav) return bFav - aFav;
+      }
+      // 3) Fallback: closer to goal first
+      const ad = Math.abs(a.col - goal.col) + Math.abs(a.row - goal.row);
+      const bd = Math.abs(b.col - goal.col) + Math.abs(b.row - goal.row);
+      return ad - bd;
+    });
+    return out;
+  }
+  function reconstruct(came, curK){
+    const path = [];
+    while (curK){
+      const [r,c] = curK.split(',').map(Number);
+      path.push({row:r, col:c});
+      curK = came.get(curK);
+    }
+    return path.reverse();
+  }
+
+  // A*
+  const open = new Set();
+  const cameFrom = new Map();
+  const gScore = new Map();
+  const fScore = new Map();
+  const nodes = new Map();
+
+  const sKey = key(start);
+  open.add(sKey);
+  gScore.set(sKey, 0);
+  fScore.set(sKey, h(start));
+  nodes.set(sKey, start);
+
+  while (open.size){
+    // lowest fScore
+    let bestKey = null, bestNode = null, best = Infinity;
+    for (const k of open){
+      const fs = fScore.get(k) ?? Infinity;
+      if (fs < best){ best = fs; bestKey = k; bestNode = nodes.get(k); }
+    }
+
+    if (bestNode.row === goal.row && bestNode.col === goal.col){
+      return reconstruct(cameFrom, bestKey);
+    }
+
+    open.delete(bestKey);
+    for (const nb of neighbors(bestNode)){
+      const nk = key(nb);
+      nodes.set(nk, {row: nb.row, col: nb.col});
+      const tentativeG = (gScore.get(bestKey) ?? Infinity) + 1;
+      if (tentativeG < (gScore.get(nk) ?? Infinity)){
+        cameFrom.set(nk, bestKey);
+        gScore.set(nk, tentativeG);
+        fScore.set(nk, tentativeG + h(nb));
+        open.add(nk);
+      }
+    }
+  }
+
+  return [start];
+}
+
+
+
+
 
 function startInteraction(mx, my) {
   const coord = getCoords(mx, my);
@@ -256,6 +435,7 @@ function startInteraction(mx, my) {
 
 function moveInteraction(mx, my) {
   if (!isMouseDown || !draggingTile) return;
+  lastMX = mx; lastMY = my;
   const current = getCoords(mx, my);
   if (!current) {
     endInteraction();
@@ -345,8 +525,8 @@ canvas.addEventListener('mouseleave', endInteraction);
 
 canvas.addEventListener('touchstart', e => {
   if (activeTouchId !== null) {
-    endInteraction();
-    activeTouchId = null;
+    // ignore additional touches during active drag
+    return;
   }
   const touch = e.changedTouches[0];
   activeTouchId = touch.identifier;
